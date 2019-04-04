@@ -7,13 +7,19 @@ namespace UnityEditor.Rendering.LookDev
         First,
         Second
     };
+    public enum ViewCompositionIndex
+    {
+        First = ViewIndex.First,
+        Second = ViewIndex.Second,
+        Composite
+    };
 
     // /!\ WARNING: these value name are used as uss file too.
     // if your rename here, rename in the uss too.
     public enum Layout
     {
-        FullA,
-        FullB,
+        FullFirstView,
+        FullSecondView,
         HorizontalSplit,
         VerticalSplit,
         CustomSplit,
@@ -77,7 +83,7 @@ namespace UnityEditor.Rendering.LookDev
         [SerializeField]
         internal GizmoState gizmoState = new GizmoState();
 
-        public bool isSimpleView => viewLayout == Layout.FullA || viewLayout == Layout.FullB;
+        public bool isSimpleView => viewLayout == Layout.FullFirstView || viewLayout == Layout.FullSecondView;
         public bool isMultiView => viewLayout == Layout.HorizontalSplit || viewLayout == Layout.VerticalSplit;
         public bool isCombinedView => viewLayout == Layout.CustomSplit || viewLayout == Layout.CustomCircular;
     }

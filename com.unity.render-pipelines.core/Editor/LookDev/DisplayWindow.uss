@@ -4,12 +4,9 @@
     flex-direction: row;
 }
 
-.VerticalSplit {
+/* override as later in document */
+.verticalSplit {
     flex-direction: column;
-}
-
-.HorizontalSplit {
-    flex-direction: row;
 }
 
 #viewContainer {

@@ -15,8 +15,9 @@ namespace UnityEditor.Rendering.LookDev
         const string lastRenderingDataSavePath = "Library/LookDevConfig.asset";
 
         //TODO: ensure only one displayer at time for the moment
-        static DisplayWindow window;
-        static Renderer renderer;
+        static DisplayWindow s_Window;
+        static Compositer s_Renderer;
+        static StageCache s_Stages;
         
         public static bool open { get; private set; }
 
@@ -30,7 +31,7 @@ namespace UnityEditor.Rendering.LookDev
         
         public static Context currentContext { get; private set; }
 
-        public static IDisplayer currentDisplayer => window;
+        public static IDisplayer currentDisplayer => s_Window;
 
         static LookDev()
             => currentContext = LoadConfigInternal() ?? GetDefaultContext();
@@ -72,7 +73,7 @@ namespace UnityEditor.Rendering.LookDev
             if (!supported)
                 throw new System.Exception("LookDev is not supported by this Scriptable Render Pipeline");
 
-            window = EditorWindow.GetWindow<DisplayWindow>();
+            s_Window = EditorWindow.GetWindow<DisplayWindow>();
             ConfigureLookDev();
         }
 
@@ -80,8 +81,8 @@ namespace UnityEditor.Rendering.LookDev
         static void OnEditorReload()
         {
             var windows = Resources.FindObjectsOfTypeAll<DisplayWindow>();
-            window = windows.Length > 0 ? windows[0] : null;
-            open = window != null;
+            s_Window = windows.Length > 0 ? windows[0] : null;
+            open = s_Window != null;
             if (open)
                 ConfigureLookDev();
         }
@@ -102,13 +103,14 @@ namespace UnityEditor.Rendering.LookDev
                 EditorApplication.delayCall +=
                     () => WaitingSRPReloadForConfiguringRenderer(maxAttempt, ++attemptNumber);
             else
-                window.Close();
+                s_Window.Close();
         }
         
         static void ConfigureRenderer()
         {
-            renderer = new Renderer(window, currentContext, dataProvider);
-            window.OnWindowClosed += () =>
+            StageCache
+            renderer = new Compositer(s_Window, currentContext, dataProvider);
+            s_Window.OnWindowClosed += () =>
             {
                 renderer.Dispose();
                 renderer = null;
@@ -120,6 +122,6 @@ namespace UnityEditor.Rendering.LookDev
         }
 
         public static void PushSceneChangesToRenderer(ViewIndex index)
-            => renderer?.UpdateScene(index);
+            => s_Renderer?.UpdateScene(index);
     }
 }

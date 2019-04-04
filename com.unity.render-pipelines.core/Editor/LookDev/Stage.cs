@@ -8,7 +8,7 @@ using UnityEngine.Rendering.LookDev;
 namespace UnityEditor.Rendering.LookDev
 {
     //TODO: add undo support
-    class Stage : IDisposable
+    public class Stage : IDisposable
     {
         const int k_PreviewCullingLayerIndex = 31; //Camera.PreviewCullingLayer; //TODO: expose or reflection
 

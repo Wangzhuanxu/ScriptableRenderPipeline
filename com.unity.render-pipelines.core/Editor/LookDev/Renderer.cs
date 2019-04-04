@@ -13,12 +13,7 @@ using IDataProvider = UnityEngine.Rendering.LookDev.IDataProvider;
 
 namespace UnityEditor.Rendering.LookDev
 {
-    enum ViewCompositionIndex
-    {
-        First = ViewIndex.First,
-        Second = ViewIndex.Second,
-        Composite
-    };
+
 
     class RenderTextureCache
     {
@@ -150,7 +145,7 @@ namespace UnityEditor.Rendering.LookDev
     /// Rendering logic
     /// TODO: extract SceneLogic elsewhere
     /// </summary>
-    internal class Renderer : IDisposable
+    public class Compositer : IDisposable
     {
         IDisplayer m_Displayer;
         Context m_Contexts;
@@ -159,10 +154,12 @@ namespace UnityEditor.Rendering.LookDev
         StageCache m_Stages;
 
         Color m_AmbientColor = new Color(0.0f, 0.0f, 0.0f, 0.0f);
-        bool m_PixelPerfect;
         bool m_RenderDocAcquisitionRequested;
 
-        public Renderer(
+        Renderer m_Renderer = new Renderer();
+        RenderingData[] m_RenderDataCache;
+
+        public Compositer(
             IDisplayer displayer,
             Context contexts,
             IDataProvider dataProvider)
@@ -171,6 +168,11 @@ namespace UnityEditor.Rendering.LookDev
             m_Contexts = contexts;
             
             m_Stages = new StageCache(dataProvider, m_Contexts);
+            m_RenderDataCache = new RenderingData[2]
+            {
+                new RenderingData() { stage = m_Stages[ViewIndex.First] },
+                new RenderingData() { stage = m_Stages[ViewIndex.Second] }
+            };
 
             m_Displayer.OnRenderDocAcquisitionTriggered += RenderDocAcquisitionRequested;
             EditorApplication.update += Render;
@@ -189,11 +191,7 @@ namespace UnityEditor.Rendering.LookDev
             CleanUp();
             GC.SuppressFinalize(this);
         }
-        ~Renderer() => CleanUp();
-
-
-        public void UpdateScene(ViewIndex index)
-            => m_Stages.UpdateScene(index);
+        ~Compositer() => CleanUp();
 
         public void Render()
         {
@@ -205,20 +203,20 @@ namespace UnityEditor.Rendering.LookDev
 
             switch (m_Contexts.layout.viewLayout)
             {
-                case Layout.FullA:
-                    RenderSingle(ViewIndex.First);
+                case Layout.FullFirstView:
+                    RenderSingleAndOutput(ViewIndex.First);
                     break;
-                case Layout.FullB:
-                    RenderSingle(ViewIndex.Second);
+                case Layout.FullSecondView:
+                    RenderSingleAndOutput(ViewIndex.Second);
                     break;
                 case Layout.HorizontalSplit:
                 case Layout.VerticalSplit:
-                    RenderSingle(ViewIndex.First);
-                    RenderSingle(ViewIndex.Second);
+                    RenderSingleAndOutput(ViewIndex.First);
+                    RenderSingleAndOutput(ViewIndex.Second);
                     break;
                 case Layout.CustomSplit:
                 case Layout.CustomCircular:
-                    RenderDualView();
+                    RenderCompositeAndOutput();
                     break;
             }
 
@@ -232,92 +230,274 @@ namespace UnityEditor.Rendering.LookDev
             //TODO: check this
             m_RenderDocAcquisitionRequested = false;
         }
-
-        bool IsNullArea(Rect r)
-            => r.width == 0 || r.height == 0
-            || float.IsNaN(r.width) || float.IsNaN(r.height);
-
-        void RenderSingle(ViewIndex index)
+        
+        void RenderSingleAndOutput(ViewIndex index)
         {
-            Rect rect = m_Displayer.GetRect(index);
-            if (IsNullArea(rect))
+            var renderingData = m_RenderDataCache[(int)index];
+            renderingData.viewPort = m_Displayer.GetRect((ViewCompositionIndex)index);
+            m_Renderer.Acquire(renderingData);
+
+            //add compositing here if needed
+
+            m_Displayer.SetTexture((ViewCompositionIndex)index, renderingData.output);
+        }
+
+        void RenderCompositeAndOutput()
+        {
+            Rect rect = m_Displayer.GetRect(ViewCompositionIndex.Composite);
+
+            var renderingData = m_RenderDataCache[0];
+            renderingData.viewPort = rect;
+            m_Renderer.Acquire(renderingData);
+            var textureA = renderingData.output;
+            renderingData = m_RenderDataCache[1];
+            renderingData.viewPort = rect;
+            m_Renderer.Acquire(renderingData);
+            var textureB = renderingData.output;
+
+            //do composition here
+            var compound = (RenderTexture)null;
+
+            m_Displayer.SetTexture(ViewCompositionIndex.Composite, compound);
+        }
+
+        RenderTexture Compositing(Rect rect)
+        {
+
+            if (m_FinalCompositionTexture.width < 1 || m_FinalCompositionTexture.height < 1)
                 return;
 
-            var cameraState = m_Contexts.GetCameraState(index);
-            var viewContext = m_Contexts.GetViewContent(index);
+            Vector4 gizmoPosition = new Vector4(m_LookDevConfig.gizmo.center.x, m_LookDevConfig.gizmo.center.y, 0.0f, 0.0f);
+            Vector4 gizmoZoneCenter = new Vector4(m_LookDevConfig.gizmo.point2.x, m_LookDevConfig.gizmo.point2.y, 0.0f, 0.0f);
+            Vector4 gizmoThickness = new Vector4(m_GizmoThickness, m_GizmoThicknessSelected, 0.0f, 0.0f);
+            Vector4 gizmoCircleRadius = new Vector4(m_GizmoCircleRadius, m_GizmoCircleRadiusSelected, 0.0f, 0.0f);
+
+            // When we render in single view, map the parameters on same context.
+            int index0 = (m_LookDevConfig.lookDevMode == LookDevMode.Single2) ? 1 : 0;
+            int index1 = (m_LookDevConfig.lookDevMode == LookDevMode.Single1) ? 0 : 1;
+
+            float exposureValue0 = (DrawCameraMode)m_LookDevConfig.lookDevContexts[index0].shadingMode == DrawCameraMode.Normal || (DrawCameraMode)m_LookDevConfig.lookDevContexts[index0].shadingMode == DrawCameraMode.TexturedWire ? m_LookDevConfig.lookDevContexts[index0].exposureValue : 0.0f;
+            float exposureValue1 = (DrawCameraMode)m_LookDevConfig.lookDevContexts[index1].shadingMode == DrawCameraMode.Normal || (DrawCameraMode)m_LookDevConfig.lookDevContexts[index1].shadingMode == DrawCameraMode.TexturedWire ? m_LookDevConfig.lookDevContexts[index1].exposureValue : 0.0f;
+
+            float dragAndDropContext = m_CurrentDragContext == LookDevEditionContext.Left ? 1.0f : (m_CurrentDragContext == LookDevEditionContext.Right ? -1.0f : 0.0f);
+
+            CubemapInfo envInfo0 = m_LookDevEnvLibrary.hdriList[m_LookDevConfig.lookDevContexts[index0].currentHDRIIndex];
+            CubemapInfo envInfo1 = m_LookDevEnvLibrary.hdriList[m_LookDevConfig.lookDevContexts[index1].currentHDRIIndex];
+
+            // Prepare shadow information
+            float shadowMultiplier0 = envInfo0.shadowInfo.shadowIntensity;
+            float shadowMultiplier1 = envInfo1.shadowInfo.shadowIntensity;
+            Color shadowColor0 = envInfo0.shadowInfo.shadowColor;
+            Color shadowColor1 = envInfo1.shadowInfo.shadowColor;
+
+            Texture texNormal0 = previewContext0.m_PreviewResult[(int)PreviewContext.PreviewContextPass.kView];
+            Texture texWithoutSun0 = previewContext0.m_PreviewResult[(int)PreviewContext.PreviewContextPass.kViewWithShadow];
+            Texture texShadows0 = previewContext0.m_PreviewResult[(int)PreviewContext.PreviewContextPass.kShadow];
+
+            Texture texNormal1 = previewContext1.m_PreviewResult[(int)PreviewContext.PreviewContextPass.kView];
+            Texture texWithoutSun1 = previewContext1.m_PreviewResult[(int)PreviewContext.PreviewContextPass.kViewWithShadow];
+            Texture texShadows1 = previewContext1.m_PreviewResult[(int)PreviewContext.PreviewContextPass.kShadow];
+
+            Vector4 compositingParams = new Vector4(m_LookDevConfig.dualViewBlendFactor, exposureValue0, exposureValue1, m_LookDevConfig.currentEditionContext == LookDevEditionContext.Left ? 1.0f : -1.0f);
+            Vector4 compositingParams2 = new Vector4(dragAndDropContext, m_LookDevConfig.enableToneMap ? 1.0f : -1.0f, shadowMultiplier0, shadowMultiplier1);
+
+            // Those could be tweakable for the neutral tonemapper, but in the case of the LookDev we don't need that
+            const float BlackIn = 0.02f;
+            const float WhiteIn = 10.0f;
+            const float BlackOut = 0.0f;
+            const float WhiteOut = 10.0f;
+            const float WhiteLevel = 5.3f;
+            const float WhiteClip = 10.0f;
+            const float DialUnits = 20.0f;
+            const float HalfDialUnits = DialUnits * 0.5f;
+
+            // converting from artist dial units to easy shader-lerps (0-1)
+            Vector4 tonemapCoeff1 = new Vector4((BlackIn * DialUnits) + 1.0f, (BlackOut * HalfDialUnits) + 1.0f, (WhiteIn / DialUnits), (1.0f - (WhiteOut / DialUnits)));
+            Vector4 tonemapCoeff2 = new Vector4(0.0f, 0.0f, WhiteLevel, WhiteClip / HalfDialUnits);
+
+            RenderTexture oldActive = RenderTexture.active;
+            RenderTexture.active = m_FinalCompositionTexture;
+            LookDevResources.m_LookDevCompositing.SetTexture("_Tex0Normal", texNormal0);
+            LookDevResources.m_LookDevCompositing.SetTexture("_Tex0WithoutSun", texWithoutSun0);
+            LookDevResources.m_LookDevCompositing.SetTexture("_Tex0Shadows", texShadows0);
+            LookDevResources.m_LookDevCompositing.SetColor("_ShadowColor0", shadowColor0);
+            LookDevResources.m_LookDevCompositing.SetTexture("_Tex1Normal", texNormal1);
+            LookDevResources.m_LookDevCompositing.SetTexture("_Tex1WithoutSun", texWithoutSun1);
+            LookDevResources.m_LookDevCompositing.SetTexture("_Tex1Shadows", texShadows1);
+            LookDevResources.m_LookDevCompositing.SetColor("_ShadowColor1", shadowColor1);
+            LookDevResources.m_LookDevCompositing.SetVector("_CompositingParams", compositingParams);
+            LookDevResources.m_LookDevCompositing.SetVector("_CompositingParams2", compositingParams2);
+            LookDevResources.m_LookDevCompositing.SetColor("_FirstViewColor", m_FirstViewGizmoColor);
+            LookDevResources.m_LookDevCompositing.SetColor("_SecondViewColor", m_SecondViewGizmoColor);
+            LookDevResources.m_LookDevCompositing.SetVector("_GizmoPosition", gizmoPosition);
+            LookDevResources.m_LookDevCompositing.SetVector("_GizmoZoneCenter", gizmoZoneCenter);
+            LookDevResources.m_LookDevCompositing.SetVector("_GizmoSplitPlane", m_LookDevConfig.gizmo.plane);
+            LookDevResources.m_LookDevCompositing.SetVector("_GizmoSplitPlaneOrtho", m_LookDevConfig.gizmo.planeOrtho);
+            LookDevResources.m_LookDevCompositing.SetFloat("_GizmoLength", m_LookDevConfig.gizmo.length);
+            LookDevResources.m_LookDevCompositing.SetVector("_GizmoThickness", gizmoThickness);
+            LookDevResources.m_LookDevCompositing.SetVector("_GizmoCircleRadius", gizmoCircleRadius);
+            LookDevResources.m_LookDevCompositing.SetFloat("_BlendFactorCircleRadius", m_BlendFactorCircleRadius);
+            LookDevResources.m_LookDevCompositing.SetFloat("_GetBlendFactorMaxGizmoDistance", GetBlendFactorMaxGizmoDistance());
+            LookDevResources.m_LookDevCompositing.SetFloat("_GizmoRenderMode", m_ForceGizmoRenderSelector ? (float)LookDevOperationType.GizmoAll : (float)m_GizmoRenderMode);
+            LookDevResources.m_LookDevCompositing.SetVector("_ScreenRatio", m_ScreenRatio);
+            LookDevResources.m_LookDevCompositing.SetVector("_ToneMapCoeffs1", tonemapCoeff1);
+            LookDevResources.m_LookDevCompositing.SetVector("_ToneMapCoeffs2", tonemapCoeff2);
+            LookDevResources.m_LookDevCompositing.SetPass((int)m_LookDevConfig.lookDevMode);
+
+            DrawFullScreenQuad(new Rect(0, 0, previewRect.width, previewRect.height));
+
+            RenderTexture.active = oldActive;
+
+            GUI.DrawTexture(previewRect, m_FinalCompositionTexture, ScaleMode.StretchToFill, false);
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    public class RenderingData
+    {
+        public Stage stage;
+        public Rect viewPort;
+        public RenderTexture output;
+    }
+
+
+    /// <summary>
+    /// Rendering logic
+    /// TODO: extract SceneLogic elsewhere
+    /// </summary>
+    public class Renderer
+    {
+        public bool pixelPerfect { get; set; }
+
+        bool IsNullArea(Rect r)
+            => r.width < 1f || r.height < 1f
+            || float.IsNaN(r.width) || float.IsNaN(r.height);
+
+        public Renderer(bool pixelPerfect = false)
+            => this.pixelPerfect = pixelPerfect;
+
+        public void Acquire(RenderingData data)
+        {
+            if (IsNullArea(data.viewPort))
+            {
+                data.output = null;
+                return;
+            }
             
-            var texture = RenderScene(
-                rect,
-                cameraState,
-                (ViewCompositionIndex)index);
-
-            //Texture2D myTexture2D = new Texture2D(texture.width, texture.height);
-            //RenderTexture.active = texture;
-            //myTexture2D.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
-            //myTexture2D.Apply();
-            //var bytes = myTexture2D.EncodeToPNG();
-            //System.IO.File.WriteAllBytes(Application.dataPath + "/../SavedScreen.png", bytes);
-           
-            //Graphics.SetRenderTarget(texture);
-            //GL.Clear(false, true, Color.cyan);
-            m_Displayer.SetTexture(index, texture);
+            BeginRendering(data);
+            data.stage.camera.Render();
+            EndRendering(data);
         }
 
-        void RenderSideBySide()
+        void BeginRendering(RenderingData data)
         {
-
+            data.stage.SetGameObjectVisible(true);
+            UpdateSizeAndLinkToCamera(data.viewPort, ref data.output, data.stage.camera);
+            data.stage.camera.enabled = true;
         }
 
-        void RenderDualView()
+        void EndRendering(RenderingData data)
         {
+            data.stage.camera.enabled = false;
+            data.stage.SetGameObjectVisible(false);
+        }
+        
+        public void UpdateSizeAndLinkToCamera(Rect rect, ref RenderTexture renderTexture, Camera renderingCamera)
+        {
+            float scaleFactor = GetScaleFactor(rect.width, rect.height);
+            int width = (int)(rect.width * scaleFactor);
+            int height = (int)(rect.height * scaleFactor);
+            if (renderTexture == null
+                || width != renderTexture.width
+                || height != renderTexture.height)
+            {
+                if (renderTexture != null)
+                    UnityEngine.Object.DestroyImmediate(renderTexture);
 
+                // Do not use GetTemporary to manage render textures. Temporary RTs are only
+                // garbage collected each N frames, and in the editor we might be wildly resizing
+                // the inspector, thus using up tons of memory.
+                //GraphicsFormat format = camera.allowHDR ? GraphicsFormat.R16G16B16A16_SFloat : GraphicsFormat.R8G8B8A8_UNorm;
+                //m_RenderTexture = new RenderTexture(rtWidth, rtHeight, 16, format);
+                //m_RenderTexture.hideFlags = HideFlags.HideAndDontSave;
+                //TODO: check format
+                renderTexture = new RenderTexture(
+                    width, height, 0,
+                    RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Default);
+                renderTexture.hideFlags = HideFlags.HideAndDontSave;
+                renderTexture.name = "LookDevTexture";
+                renderTexture.Create();
+            }
+            if (renderingCamera.targetTexture != renderTexture)
+                renderingCamera.targetTexture = renderTexture;
         }
 
-        RenderTexture RenderScene(Rect previewRect, CameraState cameraState, ViewCompositionIndex index)
+        float GetScaleFactor(float width, float height)
         {
-            BeginPreview(previewRect, index);
-
-            Camera camera = m_Stages[(ViewIndex)index].camera;
-            cameraState.UpdateCamera(camera);
-            camera.aspect = previewRect.width / previewRect.height;
-            
-            camera.Render();
-
-            return EndPreview(index);
-        }
-
-        void BeginPreview(Rect rect, ViewCompositionIndex index)
-        {
-            if (index != ViewCompositionIndex.Composite)
-                m_Stages[(ViewIndex)index].SetGameObjectVisible(true);
-
-            Camera camera = m_Stages[(ViewIndex)index].camera;
-            m_RenderTextures.UpdateSize(rect, index, m_PixelPerfect, camera);
-
-            //TODO: check scissor
-            //TODO: check default (without style) clear
-            //m_SavedState = new SavedRenderTargetState();
-            //EditorGUIUtility.SetRenderTextureNoViewport(m_RenderTexture);
-            //GL.LoadOrtho();
-            //GL.LoadPixelMatrix(0, m_RenderTexture.width, m_RenderTexture.height, 0);
-            //ShaderUtil.rawViewportRect = new Rect(0, 0, m_RenderTexture.width, m_RenderTexture.height);
-            //ShaderUtil.rawScissorRect = new Rect(0, 0, m_RenderTexture.width, m_RenderTexture.height);
-            //GL.Clear(true, true, camera.backgroundColor);
-            
-            camera.enabled = true;
-        }
-
-        RenderTexture EndPreview(ViewCompositionIndex index)
-        {
-            Stage stage = m_Stages[(ViewIndex)index];
-            stage.camera.enabled = false;
-
-            if (index != ViewCompositionIndex.Composite)
-                stage.SetGameObjectVisible(false);
-
-            //m_SavedState.Restore();
-
-            return m_RenderTextures[index];
+            float scaleFacX = Mathf.Max(Mathf.Min(width * 2, 1024), width) / width;
+            float scaleFacY = Mathf.Max(Mathf.Min(height * 2, 1024), height) / height;
+            float result = Mathf.Min(scaleFacX, scaleFacY) * EditorGUIUtility.pixelsPerPoint;
+            if (pixelPerfect)
+                result = Mathf.Max(Mathf.Round(result), 1f);
+            return result;
         }
     }
 }

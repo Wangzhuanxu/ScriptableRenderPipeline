@@ -9,8 +9,8 @@ namespace UnityEditor.Rendering.LookDev
 {
     public interface IDisplayer
     {
-        Rect GetRect(ViewIndex index);
-        void SetTexture(ViewIndex index, Texture texture);
+        Rect GetRect(ViewCompositionIndex index);
+        void SetTexture(ViewCompositionIndex index, Texture texture);
 
         event Action<Layout> OnLayoutChanged;
 
@@ -44,6 +44,7 @@ namespace UnityEditor.Rendering.LookDev
         const string k_SharedContainerClass = "container";
         const string k_FirstViewClass = "firstView";
         const string k_SecondViewsClass = "secondView";
+        const string k_VerticalViewsClass = "verticalSplit";
         const string k_ShowEnvironmentPanelClass = "showEnvironmentPanel";
 
         VisualElement m_MainContainer;
@@ -60,39 +61,44 @@ namespace UnityEditor.Rendering.LookDev
             {
                 if (LookDev.currentContext.layout.viewLayout != value)
                 {
-                    if (value == Layout.HorizontalSplit || value == Layout.VerticalSplit)
+                    switch (value)
                     {
-                        if (!m_ViewContainer.ClassListContains(k_FirstViewClass))
-                            m_ViewContainer.AddToClassList(k_FirstViewClass);
-                        if (!m_ViewContainer.ClassListContains(k_SecondViewsClass))
-                            m_ViewContainer.AddToClassList(k_SecondViewsClass);
-                    }
-                    else if (value == Layout.FullA)
-                    {
-                        if (!m_ViewContainer.ClassListContains(k_FirstViewClass))
-                            m_ViewContainer.AddToClassList(k_FirstViewClass);
-                        if (m_ViewContainer.ClassListContains(k_SecondViewsClass))
-                            m_ViewContainer.RemoveFromClassList(k_SecondViewsClass);
-                    }
-                    else if (value == Layout.FullB)
-                    {
-                        if (m_ViewContainer.ClassListContains(k_FirstViewClass))
-                            m_ViewContainer.RemoveFromClassList(k_FirstViewClass);
-                        if (!m_ViewContainer.ClassListContains(k_SecondViewsClass))
-                            m_ViewContainer.AddToClassList(k_SecondViewsClass);
-                    }
-                    else
-                    {
-                        if (m_ViewContainer.ClassListContains(k_FirstViewClass))
-                            m_ViewContainer.RemoveFromClassList(k_FirstViewClass);
-                        if (m_ViewContainer.ClassListContains(k_SecondViewsClass))
-                            m_ViewContainer.RemoveFromClassList(k_SecondViewsClass);
+                        case Layout.HorizontalSplit:
+                        case Layout.VerticalSplit:
+                            if (!m_ViewContainer.ClassListContains(k_FirstViewClass))
+                                m_ViewContainer.AddToClassList(k_FirstViewClass);
+                            if (!m_ViewContainer.ClassListContains(k_SecondViewsClass))
+                                m_ViewContainer.AddToClassList(k_SecondViewsClass);
+                            if (value == Layout.VerticalSplit)
+                            {
+                                m_ViewContainer.AddToClassList(k_VerticalViewsClass);
+                                if (!m_ViewContainer.ClassListContains(k_VerticalViewsClass))
+                                    m_ViewContainer.AddToClassList(k_FirstViewClass);
+                            }
+                            break;
+                        case Layout.FullFirstView:
+                        case Layout.CustomSplit:       //display composition on first rect
+                        case Layout.CustomCircular:    //display composition on first rect
+                            if (!m_ViewContainer.ClassListContains(k_FirstViewClass))
+                                m_ViewContainer.AddToClassList(k_FirstViewClass);
+                            if (m_ViewContainer.ClassListContains(k_SecondViewsClass))
+                                m_ViewContainer.RemoveFromClassList(k_SecondViewsClass);
+                            break;
+                        case Layout.FullSecondView:
+                            if (m_ViewContainer.ClassListContains(k_FirstViewClass))
+                                m_ViewContainer.RemoveFromClassList(k_FirstViewClass);
+                            if (!m_ViewContainer.ClassListContains(k_SecondViewsClass))
+                                m_ViewContainer.AddToClassList(k_SecondViewsClass);
+                            break;
+                        default:
+                            throw new ArgumentException("Unknown Layout");
                     }
 
-                    //Handle flex direction here
-                    if (m_ViewContainer.ClassListContains(LookDev.currentContext.layout.viewLayout.ToString()))
-                        m_ViewContainer.RemoveFromClassList(LookDev.currentContext.layout.viewLayout.ToString());
-                    m_ViewContainer.AddToClassList(value.ToString());
+                    //Add flex direction here
+                    if (value == Layout.VerticalSplit)
+                        m_ViewContainer.AddToClassList(k_VerticalViewsClass);
+                    else if (m_ViewContainer.ClassListContains(k_VerticalViewsClass))
+                        m_ViewContainer.RemoveFromClassList(k_VerticalViewsClass);
 
                     LookDev.currentContext.layout.viewLayout = value;
 
@@ -234,11 +240,37 @@ namespace UnityEditor.Rendering.LookDev
             //to complete
         }
 
-        Rect IDisplayer.GetRect(ViewIndex index)
-            => m_Views[(int)index].contentRect;
+        Rect IDisplayer.GetRect(ViewCompositionIndex index)
+        {
+            switch (index)
+            {
+                case ViewCompositionIndex.First:
+                case ViewCompositionIndex.Composite:    //display composition on first rect
+                    return m_Views[(int)ViewIndex.First].contentRect;
+                case ViewCompositionIndex.Second:
+                    return m_Views[(int)ViewIndex.Second].contentRect;
+                default:
+                    throw new ArgumentException("Unknown ViewCompositionIndex: " + index);
+            }
+        }
 
-        void IDisplayer.SetTexture(ViewIndex index, Texture texture)
-            => m_Views[(int)index].image = texture;
+        void IDisplayer.SetTexture(ViewCompositionIndex index, Texture texture)
+        {
+            switch (index)
+            {
+                case ViewCompositionIndex.First:
+                case ViewCompositionIndex.Composite:    //display composition on first rect
+                    if (m_Views[(int)ViewIndex.First].image != texture)
+                        m_Views[(int)ViewIndex.First].image = texture;
+                    break;
+                case ViewCompositionIndex.Second:
+                    if (m_Views[(int)ViewIndex.Second].image != texture)
+                        m_Views[(int)ViewIndex.Second].image = texture;
+                    break;
+                default:
+                    throw new ArgumentException("Unknown ViewCompositionIndex: " + index);
+            }
+        }
     }
     
 }
